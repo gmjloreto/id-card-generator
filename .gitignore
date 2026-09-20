@@ -1,4 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtualenv
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Arquivos de saida
 saida/
-*tar.gz
+*.xlsx
+
+# Compressed
+*.tar.gz
 *.zip
-*rar
+*.rar
