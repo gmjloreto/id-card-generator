@@ -20,6 +20,7 @@ pip install -r requirements.txt
 ```
 id-card-generator/
 ├── gerar_crachas.py    # Ferramenta visual (interface grafica)
+├── word_crachas.py     # Folha de impressao dos crachas (PDF + Word)
 ├── modelo.png          # Template do cracha
 ├── fonte.ttf           # Fonte TrueType
 ├── nomes.xlsx          # Planilha com nome e equipe
@@ -61,6 +62,34 @@ Ao selecionar a planilha, a ferramenta valida automaticamente:
 - Equipes vazias
 - Nomes duplicados
 - Nomes que podem conter equipe misturada
+
+## Folha de impressao
+
+```bash
+python word_crachas.py
+```
+
+Le todas as fotos de `saida/` e monta a folha A4 para imprimir. Voce digita a
+largura e a altura do cracha em mm (o tamanho final impresso), o espaco entre
+eles e a margem da folha. A foto entra inteira na caixa, sem esticar e sem
+cortar: o que sobra da caixa vira borda branca.
+
+Dois arquivos saem:
+
+- `saida/crachas.pdf` - 300 dpi, uma folha por pagina, pronto para imprimir
+- `saida/crachas.docx` - um cracha por celula, editavel (o Google Docs ignora
+  altura exata de linha e pode paginar diferente: para imprimir, use o PDF)
+
+O encaixe e uma conta fechada, sem girar cracha nenhum:
+
+```
+colunas = (190 + 2) // (54 + 2) = 3        linhas = (277 + 2) // (86 + 2) = 3
+por folha = 9                              76 crachas -> 9 folhas
+```
+
+```bash
+python word_crachas.py --teste   # confere layout, contagem e arquivos
+```
 
 ## Funcionalidades
 
