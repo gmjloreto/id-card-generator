@@ -17,6 +17,8 @@ import zipfile
 from io import BytesIO
 
 from PIL import Image
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGroupBox, QLabel, QLineEdit, QPushButton, QDoubleSpinBox,
@@ -58,9 +60,9 @@ def _tw(mm):
     return int(round(mm * MM_TW))
 
 
-def _px(mm):
-    """Milimetros -> pixels na resolucao de impressao."""
-    return max(1, int(round(mm / 25.4 * DPI)))
+def _px(mm, dpi=DPI):
+    """Milimetros -> pixels na resolucao escolhida."""
+    return max(1, int(round(mm / 25.4 * dpi)))
 
 
 def listar(pasta):
@@ -96,14 +98,14 @@ def _rgb(img):
     return img.convert("RGB")
 
 
-def cartao(caminho, largura, altura):
+def cartao(caminho, largura, altura, dpi=DPI):
     """Imagem de exatamente (largura x altura) mm com a foto inteira dentro.
 
     A foto e reduzida proporcionalmente e centralizada; o que sobra da caixa
     vira borda branca. Nunca estica, nunca recorta.
     """
     img = _rgb(Image.open(caminho))
-    alvo = (_px(largura), _px(altura))
+    alvo = (_px(largura, dpi), _px(altura, dpi))
     escala = min(alvo[0] / img.width, alvo[1] / img.height)
     img = img.resize((max(1, int(img.width * escala)), max(1, int(img.height * escala))),
                      Image.LANCZOS)
@@ -112,16 +114,20 @@ def cartao(caminho, largura, altura):
     return fundo
 
 
-def folhas(caminhos, largura, altura, margem=10.0, espaco=2.0, pagina=PAGINA_MM):
-    """Gera (folha A4, retangulos dos crachas em px) uma folha por vez."""
+def folhas(caminhos, largura, altura, margem=10.0, espaco=2.0, pagina=PAGINA_MM, dpi=DPI):
+    """Gera (folha A4, retangulos dos crachas em px) uma folha por vez.
+
+    dpi menor que 300 serve so para a pre-visualizacao na tela.
+    """
     colunas, linhas = grade(largura, altura, margem, espaco, pagina)
     uw, uh = pagina[0] - 2 * margem, pagina[1] - 2 * margem
     bloco_w = colunas * largura + (colunas - 1) * espaco
     bloco_h = linhas * altura + (linhas - 1) * espaco
-    px_m, px_l, px_a, px_e = _px(margem), _px(largura), _px(altura), _px(espaco)
-    x0 = px_m + _px((uw - bloco_w) / 2)
-    y0 = px_m + _px((uh - bloco_h) / 2)
-    tam = (_px(pagina[0]), _px(pagina[1]))
+    px_m, px_l = _px(margem, dpi), _px(largura, dpi)
+    px_a, px_e = _px(altura, dpi), _px(espaco, dpi)
+    x0 = px_m + _px((uw - bloco_w) / 2, dpi)
+    y0 = px_m + _px((uh - bloco_h) / 2, dpi)
+    tam = (_px(pagina[0], dpi), _px(pagina[1], dpi))
 
     itens = list(caminhos)
     for inicio in range(0, len(itens), colunas * linhas):
@@ -130,7 +136,7 @@ def folhas(caminhos, largura, altura, margem=10.0, espaco=2.0, pagina=PAGINA_MM)
         for k, caminho in enumerate(itens[inicio:inicio + colunas * linhas]):
             i, j = divmod(k, colunas)
             x, y = x0 + j * (px_l + px_e), y0 + i * (px_a + px_e)
-            folha.paste(cartao(caminho, largura, altura), (x, y))
+            folha.paste(cartao(caminho, largura, altura, dpi), (x, y))
             retangulos.append((x, y, px_l, px_a))
         yield folha, retangulos
 
@@ -324,6 +330,16 @@ def gerar_docx(caminhos, largura, altura, margem=10.0, espaco=2.0,
     return len(paginas), destino
 
 
+DPI_PREVIA = 72                # so a pre-visualizacao na tela
+
+
+def _pixmap(img):
+    """PIL -> QPixmap (o .copy() solta o buffer do Pillow antes de sumir)."""
+    dados = img.tobytes("raw", "RGB")
+    qimg = QImage(dados, img.width, img.height, img.width * 3, QImage.Format.Format_RGB888)
+    return QPixmap.fromImage(qimg.copy())
+
+
 def testar():
     import tempfile
     from PIL import ImageChops
@@ -485,7 +501,11 @@ class MainWindow(QMainWindow):
         self._lbl = QLabel("")
         self._lbl.setWordWrap(True)
         raiz.addWidget(self._lbl)
-        raiz.addStretch()
+
+        self._imagem = QLabel()
+        self._imagem.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._imagem.setStyleSheet("background-color: #f8fafc; border: 1px solid #334155;")
+        raiz.addWidget(self._imagem, stretch=1)
 
         b_gerar = QPushButton("Gerar PDF e Word", objectName="successBtn")
         b_gerar.clicked.connect(self._gerar)
@@ -510,7 +530,8 @@ class MainWindow(QMainWindow):
                 self._sp["margem"].value(), self._sp["espaco"].value())
 
     def _previa(self):
-        """Conta as folhas antes de gerar."""
+        """Conta as folhas e mostra a primeira antes de gerar."""
+        folha = None
         try:
             itens = listar(self._ed_pasta.text())
             larg, alt, margem, espaco = self._medidas()
@@ -518,9 +539,15 @@ class MainWindow(QMainWindow):
             por_folha = colunas * linhas
             texto = (f"{len(itens)} foto(s) -> {math.ceil(len(itens) / por_folha) if itens else 0}"
                      f" folha(s)  |  {por_folha} por folha ({colunas} x {linhas})")
+            folha, _ = next(iter(folhas(itens[:por_folha], larg, alt, margem, espaco,
+                                        dpi=DPI_PREVIA)), (None, None))
         except Exception as e:
             texto = f"ERRO: {e}"
         self._lbl.setText(texto)
+        self._imagem.clear()
+        if folha is not None:
+            folha.thumbnail((400, 560), Image.LANCZOS)
+            self._imagem.setPixmap(_pixmap(folha))
 
     def _gerar(self):
         itens = listar(self._ed_pasta.text())
