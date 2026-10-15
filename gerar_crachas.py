@@ -108,6 +108,22 @@ QRadioButton::indicator:checked {
     border-color: #38bdf8;
     background-color: #38bdf8;
 }
+QCheckBox {
+    color: #f8fafc;
+    spacing: 8px;
+    font-weight: 500;
+}
+QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    border: 2px solid #64748b;
+    background-color: #020617;
+}
+QCheckBox::indicator:checked {
+    border-color: #38bdf8;
+    background-color: #38bdf8;
+}
 QScrollArea {
     background-color: #020617;
     border: none;
