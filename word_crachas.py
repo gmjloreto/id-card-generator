@@ -16,12 +16,12 @@ import xml.etree.ElementTree as ET
 import zipfile
 from io import BytesIO
 
-from PIL import Image
+from PIL import Image, ImageDraw
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QGroupBox, QLabel, QLineEdit, QPushButton, QDoubleSpinBox,
+    QGroupBox, QLabel, QLineEdit, QPushButton, QDoubleSpinBox, QCheckBox,
     QFileDialog, QMessageBox,
 )
 
@@ -31,7 +31,7 @@ PAGINA_MM = (210.0, 297.0)     # A4 retrato
 DPI = 300                      # resolucao da folha impressa
 QUALIDADE = 90
 PISCOS_MM = 1.0                # respiro da linha da tabela no DOCX (nada e cortado)
-FOLGA_LINHA_MM = 3.0           # folga extra por faixa no DOCX: o Google Docs ignora
+FOLGA_LINHA_MM = 2.0           # folga extra por faixa no DOCX: o Google Docs ignora
                                # altura exata de linha e empurra faixa para a folha seguinte
 MM_EMU = 36000                 # EMU por mm
 MM_TW = 1440.0 / 25.4          # twips por mm
@@ -87,6 +87,31 @@ def grade(largura, altura, margem=10.0, espaco=2.0, pagina=PAGINA_MM, folga_linh
             max(1, int((uh + espaco + 1e-9) // (altura + espaco + folga_linha))))
 
 
+def _capacidade(larg, alt, margem, espaco, pagina, folga_linha):
+    try:
+        colunas, linhas = grade(larg, alt, margem, espaco, pagina, folga_linha)
+        return colunas * linhas
+    except ValueError:
+        return 0
+
+
+def melhor_giro(largura, altura, margem=10.0, espaco=2.0, pagina=PAGINA_MM,
+                folga_linha=0.0, permitir=False):
+    """(girado, colunas, linhas): a orientacao em que cabem mais crachas.
+
+    Com permitir=True compara em pe com deitado e escolhe o que economiza
+    folha; empate fica com em pe, que e o jeito de usar o cracha.
+    """
+    em_pe = _capacidade(largura, altura, margem, espaco, pagina, folga_linha)
+    deitado = (_capacidade(altura, largura, margem, espaco, pagina, folga_linha)
+               if permitir else 0)
+    if max(em_pe, deitado) == 0:
+        grade(largura, altura, margem, espaco, pagina, folga_linha)   # sobe o erro
+    girado = deitado > em_pe
+    larg, alt = (altura, largura) if girado else (largura, altura)
+    return (girado,) + grade(larg, alt, margem, espaco, pagina, folga_linha)
+
+
 def _rgb(img):
     if img.mode == "RGB":
         return img
@@ -98,13 +123,16 @@ def _rgb(img):
     return img.convert("RGB")
 
 
-def cartao(caminho, largura, altura, dpi=DPI):
+def cartao(caminho, largura, altura, dpi=DPI, girar=False):
     """Imagem de exatamente (largura x altura) mm com a foto inteira dentro.
 
     A foto e reduzida proporcionalmente e centralizada; o que sobra da caixa
-    vira borda branca. Nunca estica, nunca recorta.
+    vira borda branca. Nunca estica, nunca recorta. Com girar, a foto e
+    deitada 90 graus e a caixa recebida ja vem transposta.
     """
     img = _rgb(Image.open(caminho))
+    if girar:
+        img = img.transpose(Image.ROTATE_90)
     alvo = (_px(largura, dpi), _px(altura, dpi))
     escala = min(alvo[0] / img.width, alvo[1] / img.height)
     img = img.resize((max(1, int(img.width * escala)), max(1, int(img.height * escala))),
@@ -114,17 +142,21 @@ def cartao(caminho, largura, altura, dpi=DPI):
     return fundo
 
 
-def folhas(caminhos, largura, altura, margem=10.0, espaco=2.0, pagina=PAGINA_MM, dpi=DPI):
+def folhas(caminhos, largura, altura, margem=10.0, espaco=2.0, pagina=PAGINA_MM,
+           dpi=DPI, permitir_giro=False):
     """Gera (folha A4, retangulos dos crachas em px) uma folha por vez.
 
     dpi menor que 300 serve so para a pre-visualizacao na tela.
     """
-    colunas, linhas = grade(largura, altura, margem, espaco, pagina)
+    girado, colunas, linhas = melhor_giro(largura, altura, margem, espaco, pagina,
+                                          permitir=permitir_giro)
+    caixa_l, caixa_a = (altura, largura) if girado else (largura, altura)
     uw, uh = pagina[0] - 2 * margem, pagina[1] - 2 * margem
-    bloco_w = colunas * largura + (colunas - 1) * espaco
-    bloco_h = linhas * altura + (linhas - 1) * espaco
-    px_m, px_l = _px(margem, dpi), _px(largura, dpi)
-    px_a, px_e = _px(altura, dpi), _px(espaco, dpi)
+    bloco_w = colunas * caixa_l + (colunas - 1) * espaco
+    bloco_h = linhas * caixa_a + (linhas - 1) * espaco
+    px_m = _px(margem, dpi)
+    px_l, px_a = _px(caixa_l, dpi), _px(caixa_a, dpi)
+    px_e = _px(espaco, dpi)
     x0 = px_m + _px((uw - bloco_w) / 2, dpi)
     y0 = px_m + _px((uh - bloco_h) / 2, dpi)
     tam = (_px(pagina[0], dpi), _px(pagina[1], dpi))
@@ -136,7 +168,7 @@ def folhas(caminhos, largura, altura, margem=10.0, espaco=2.0, pagina=PAGINA_MM,
         for k, caminho in enumerate(itens[inicio:inicio + colunas * linhas]):
             i, j = divmod(k, colunas)
             x, y = x0 + j * (px_l + px_e), y0 + i * (px_a + px_e)
-            folha.paste(cartao(caminho, largura, altura, dpi), (x, y))
+            folha.paste(cartao(caminho, caixa_l, caixa_a, dpi, girado), (x, y))
             retangulos.append((x, y, px_l, px_a))
         yield folha, retangulos
 
@@ -185,13 +217,14 @@ def _escrever_pdf(destino, folhas_iter):
 
 
 def gerar_pdf(caminhos, largura, altura, margem=10.0, espaco=2.0,
-              destino=None, pagina=PAGINA_MM):
+              destino=None, pagina=PAGINA_MM, permitir_giro=False):
     """PDF de impressao, uma folha A4 por pagina. Devolve (folhas, caminho)."""
     itens = list(caminhos)
     if not itens:
         raise ValueError("Nenhuma imagem encontrada.")
     destino = destino or os.path.join(BASE, "saida", "crachas.pdf")
-    return _escrever_pdf(destino, folhas(itens, largura, altura, margem, espaco, pagina)), destino
+    return _escrever_pdf(destino, folhas(itens, largura, altura, margem, espaco,
+                                          pagina, permitir_giro=permitir_giro)), destino
 
 
 def _imagem_xml(rid, larg_mm, alt_mm, docpr, nome):
@@ -241,7 +274,7 @@ def _jpeg(cartao_png):
 
 
 def gerar_docx(caminhos, largura, altura, margem=10.0, espaco=2.0,
-                destino=None, pagina=PAGINA_MM):
+                destino=None, pagina=PAGINA_MM, permitir_giro=False):
     """DOCX com um cracha por celula, editavel. Devolve (folhas, caminho).
 
     Linhas com FOLGA_LINHA_MM a mais porque o Google Docs ignora a altura exata
@@ -252,12 +285,14 @@ def gerar_docx(caminhos, largura, altura, margem=10.0, espaco=2.0,
         raise ValueError("Nenhuma imagem encontrada.")
     destino = destino or os.path.join(BASE, "saida", "crachas.docx")
 
-    colunas, linhas = grade(largura, altura, margem, espaco, pagina, FOLGA_LINHA_MM)
+    girado, colunas, linhas = melhor_giro(largura, altura, margem, espaco, pagina,
+                                          FOLGA_LINHA_MM, permitir_giro)
+    caixa_l, caixa_a = (altura, largura) if girado else (largura, altura)
     uw = pagina[0] - 2 * margem
-    bloco_w = colunas * largura + (colunas - 1) * espaco
+    bloco_w = colunas * caixa_l + (colunas - 1) * espaco
     indent = max(0.0, (uw - bloco_w) / 2)
     meia_tw = _tw(espaco / 2)
-    altura_linha = altura + PISCOS_MM
+    altura_linha = caixa_a + PISCOS_MM
 
     paginas, restantes = [], itens
     while restantes:
@@ -280,17 +315,18 @@ def gerar_docx(caminhos, largura, altura, margem=10.0, espaco=2.0,
                 docpr += 1
                 nome_media = f"cracha{len(midia) + 1}.jpg"
                 rid = f"rId{len(midia) + 1}"
-                midia.append((nome_media, _jpeg(cartao(caminho, largura, altura))))
+                midia.append((nome_media, _jpeg(cartao(caminho, caixa_l, caixa_a,
+                                                      girar=girado))))
                 relacoes.append(
                     f'<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/'
                     f'officeDocument/2006/relationships/image" Target="media/{nome_media}"/>'
                 )
-                celulas.append(_celula_xml(rid, largura, altura_linha, docpr,
+                celulas.append(_celula_xml(rid, caixa_l, altura_linha, docpr,
                                            os.path.basename(caminho), meia_tw))
             linhas_xml.append(f'<w:tr><w:trPr><w:trHeight w:val="{_tw(altura_linha)}"'
                               f' w:hRule="exact"/><w:cantSplit/></w:trPr>'
                               f'{"".join(celulas)}</w:tr>')
-        corpo.append(_tabela_xml(linhas_xml, colunas, _tw(largura + espaco),
+        corpo.append(_tabela_xml(linhas_xml, colunas, _tw(caixa_l + espaco),
                                  _tw(bloco_w), _tw(indent), meia_tw))
 
     doc = DOC_INICIO + "".join(corpo) + DOC_FIM.format(
@@ -340,12 +376,34 @@ def _pixmap(img):
     return QPixmap.fromImage(qimg.copy())
 
 
+def _destacar(folha):
+    """Folha branca sobre fundo escuro, para dar onde a folha acaba.
+
+    So na pre-visualizacao: o PDF sai com a folha inteira branca, como a
+    impressora precisa.
+    """
+    folha.thumbnail((330, 470), Image.LANCZOS)
+    borda = 10
+    fundo = Image.new("RGB", (folha.width + borda * 2, folha.height + borda * 2), "#1e293b")
+    fundo.paste(folha, (borda, borda))
+    ImageDraw.Draw(fundo).rectangle(
+        [borda - 1, borda - 1, borda + folha.width, borda + folha.height],
+        outline="#94a3b8")
+    return fundo
+
+
 def testar():
     import tempfile
     from PIL import ImageChops
 
     def area_da_foto(cartao_png):
         return ImageChops.difference(cartao_png, Image.new("RGB", cartao_png.size, "white")).getbbox()
+
+    def deitada(dados):
+        """A foto dentro do cartao esta deitada (o cartao em si e a caixa)."""
+        img = Image.open(BytesIO(dados))
+        x0, y0, x1, y1 = area_da_foto(img)
+        return (x1 - x0) > (y1 - y0)
 
     with tempfile.TemporaryDirectory() as tmp:
         pasta = os.path.join(tmp, "saida")
@@ -430,6 +488,27 @@ def testar():
             cy = int(frag.split('cy="')[1].split('"')[0]) / MM_EMU
             assert abs(cx - larg) < 0.1 and abs(cy - (alt + PISCOS_MM)) < 0.1, (cx, cy)
 
+        # girado so quando economiza folha, e o cracha e deitado de verdade
+        assert melhor_giro(54.0, 86.0, margem, espaco) == (False,) + (colunas, linhas)
+        assert melhor_giro(65.0, 45.0, margem, espaco) == (False, 2, 5)       # 10 em pe
+        girado, col, lin = melhor_giro(65.0, 45.0, margem, espaco, permitir=True)
+        assert (girado, col, lin) == (True, 4, 4), (girado, col, lin)         # 16 deitado
+        cd = cartao(caminhos[0], 45.0, 65.0, girar=True)   # caixa ja transposta
+        assert cd.size == (_px(45.0), _px(65.0)), cd.size
+        x0, y0, x1, y1 = area_da_foto(cd)
+        assert (x1 - x0) > (y1 - y0), "a foto dentro do cracha ficou em pe"
+        assert abs(((x1 - x0) / (y1 - y0)) / (1021 / 681) - 1) < 0.01, "foto esticada"
+        n_girado, _ = gerar_pdf(caminhos, 65.0, 45.0, margem, espaco,
+                                os.path.join(tmp, "girado.pdf"), permitir_giro=True)
+        assert n_girado == math.ceil(76 / 16) == 5, n_girado
+        n_docx_girado, docx_girado = gerar_docx(caminhos, 65.0, 45.0, margem, espaco,
+                                                os.path.join(tmp, "girado.docx"),
+                                                permitir_giro=True)
+        assert n_docx_girado == n_girado, (n_docx_girado, n_girado)
+        with zipfile.ZipFile(docx_girado) as z:
+            assert sum(1 for nome in z.namelist() if nome.startswith("word/media/")
+                       and deitada(z.read(nome))) == 76
+
         print("OK: 76 fotos, %d folha(s) de %d, PDF %d KB, DOCX %d KB"
               % (folhas_geradas, colunas * linhas,
                  os.path.getsize(pdf) // 1024, os.path.getsize(docx_path) // 1024))
@@ -498,13 +577,17 @@ class MainWindow(QMainWindow):
             self._sp[chave] = spin
         raiz.addWidget(medidas)
 
+        self._ck_giro = QCheckBox("Deitar os crachas se couber mais folha (empate fica em pe)")
+        self._ck_giro.toggled.connect(self._previa)
+        raiz.addWidget(self._ck_giro)
+
         self._lbl = QLabel("")
         self._lbl.setWordWrap(True)
         raiz.addWidget(self._lbl)
 
         self._imagem = QLabel()
         self._imagem.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._imagem.setStyleSheet("background-color: #f8fafc; border: 1px solid #334155;")
+        self._imagem.setStyleSheet("background-color: #1e293b; border: 1px solid #334155;")
         raiz.addWidget(self._imagem, stretch=1)
 
         b_gerar = QPushButton("Gerar PDF e Word", objectName="successBtn")
@@ -535,28 +618,35 @@ class MainWindow(QMainWindow):
         try:
             itens = listar(self._ed_pasta.text())
             larg, alt, margem, espaco = self._medidas()
-            colunas, linhas = grade(larg, alt, margem, espaco)
+            girar = self._ck_giro.isChecked()
+            girado, colunas, linhas = melhor_giro(larg, alt, margem, espaco, permitir=girar)
             por_folha = colunas * linhas
-            texto = (f"{len(itens)} foto(s) -> {math.ceil(len(itens) / por_folha) if itens else 0}"
-                     f" folha(s)  |  {por_folha} por folha ({colunas} x {linhas})")
+            em_pe = _capacidade(larg, alt, margem, espaco, PAGINA_MM, 0.0)
+            n_folhas = math.ceil(len(itens) / por_folha) if itens else 0
+            texto = (f"{len(itens)} foto(s) -> {n_folhas} folha(s)  |  {por_folha} por folha "
+                     f"({colunas} x {linhas}) {'deitados' if girado else 'em pe'}")
+            if girar:
+                texto += f"  |  deitado {por_folha} contra {em_pe} em pe"
             folha, _ = next(iter(folhas(itens[:por_folha], larg, alt, margem, espaco,
-                                        dpi=DPI_PREVIA)), (None, None))
+                                        dpi=DPI_PREVIA, permitir_giro=girar)), (None, None))
         except Exception as e:
             texto = f"ERRO: {e}"
         self._lbl.setText(texto)
         self._imagem.clear()
         if folha is not None:
-            folha.thumbnail((400, 560), Image.LANCZOS)
-            self._imagem.setPixmap(_pixmap(folha))
+            self._imagem.setPixmap(_pixmap(_destacar(folha)))
 
     def _gerar(self):
         itens = listar(self._ed_pasta.text())
         larg, alt, margem, espaco = self._medidas()
+        girar = self._ck_giro.isChecked()
         try:
             folhas_pdf, destino_pdf = gerar_pdf(itens, larg, alt, margem, espaco,
-                                                self._ed_pdf.text())
+                                                self._ed_pdf.text(),
+                                                permitir_giro=girar)
             folhas_docx, destino_docx = gerar_docx(itens, larg, alt, margem, espaco,
-                                                  self._ed_docx.text())
+                                                  self._ed_docx.text(),
+                                                  permitir_giro=girar)
         except Exception as e:
             QMessageBox.critical(self, "Erro", str(e))
             return

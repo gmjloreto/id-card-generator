@@ -80,12 +80,16 @@ Dois arquivos saem:
 - `saida/crachas.docx` - um cracha por celula, editavel (o Google Docs ignora
   altura exata de linha e pode paginar diferente: para imprimir, use o PDF)
 
-O encaixe e uma conta fechada, sem girar cracha nenhum:
+O encaixe e uma conta fechada, sem misturar orientacoes na mesma folha:
 
 ```
 colunas = (190 + 2) // (54 + 2) = 3        linhas = (277 + 2) // (86 + 2) = 3
 por folha = 9                              76 crachas -> 9 folhas
 ```
+
+A opcao "Deitar os crachas se couber mais folha" compara a grade em pe com a
+grade deitada e usa a deitada so quando ela economiza folha (empate fica em
+pe). Com 65x45 mm: 10 por folha em pe contra 16 deitado, 8 folhas contra 5.
 
 ```bash
 python word_crachas.py --teste   # confere layout, contagem e arquivos
