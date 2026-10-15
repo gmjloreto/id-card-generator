@@ -17,7 +17,7 @@ import zipfile
 from io import BytesIO
 
 from PIL import Image, ImageDraw
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -528,6 +528,13 @@ class MainWindow(QMainWindow):
         raiz = QVBoxLayout(central)
         raiz.setContentsMargins(16, 16, 16, 16)
         raiz.setSpacing(12)
+
+        # o timer vem antes dos campos: eles ja chamam _previa no setValue
+        self._timer_previa = QTimer(self)
+        self._timer_previa.setSingleShot(True)
+        self._timer_previa.setInterval(250)
+        self._timer_previa.timeout.connect(self._desenhar_previa)
+
         raiz.addWidget(QLabel("Fotos da pasta saida/ prontas para imprimir",
                               objectName="titleLabel"))
 
@@ -612,29 +619,49 @@ class MainWindow(QMainWindow):
         return (self._sp["largura"].value(), self._sp["altura"].value(),
                 self._sp["margem"].value(), self._sp["espaco"].value())
 
-    def _previa(self):
-        """Conta as folhas e mostra a primeira antes de gerar."""
-        folha = None
+    def _contagem(self):
+        """(itens, girado, colunas, linhas, texto) - so aritmetica, e instantaneo."""
+        itens = listar(self._ed_pasta.text())
+        larg, alt, margem, espaco = self._medidas()
+        girar = self._ck_giro.isChecked()
+        girado, colunas, linhas = melhor_giro(larg, alt, margem, espaco, permitir=girar)
+        por_folha = colunas * linhas
+        em_pe = _capacidade(larg, alt, margem, espaco, PAGINA_MM, 0.0)
+        texto = (f"{len(itens)} foto(s) -> {math.ceil(len(itens) / por_folha) if itens else 0}"
+                 f" folha(s)  |  {por_folha} por folha ({colunas} x {linhas})"
+                 f" {'deitados' if girado else 'em pe'}")
+        if girar:
+            texto += f"  |  deitado {por_folha} contra {em_pe} em pe"
+        return itens, girado, colunas, linhas, texto
+
+    def _previa(self, *_):
+        """Atualiza a conta na hora e adia so o desenho da folha.
+
+        Desenhar trava a interface: no valueChanged cada tecla esperava o
+        render. Aqui a conta sai na hora e a imagem 250 ms depois da ultima
+        tecla, com um "calculando" no lugar.
+        """
         try:
-            itens = listar(self._ed_pasta.text())
-            larg, alt, margem, espaco = self._medidas()
-            girar = self._ck_giro.isChecked()
-            girado, colunas, linhas = melhor_giro(larg, alt, margem, espaco, permitir=girar)
-            por_folha = colunas * linhas
-            em_pe = _capacidade(larg, alt, margem, espaco, PAGINA_MM, 0.0)
-            n_folhas = math.ceil(len(itens) / por_folha) if itens else 0
-            texto = (f"{len(itens)} foto(s) -> {n_folhas} folha(s)  |  {por_folha} por folha "
-                     f"({colunas} x {linhas}) {'deitados' if girado else 'em pe'}")
-            if girar:
-                texto += f"  |  deitado {por_folha} contra {em_pe} em pe"
-            folha, _ = next(iter(folhas(itens[:por_folha], larg, alt, margem, espaco,
-                                        dpi=DPI_PREVIA, permitir_giro=girar)), (None, None))
+            self._lbl.setText(self._contagem()[4])
         except Exception as e:
-            texto = f"ERRO: {e}"
-        self._lbl.setText(texto)
+            self._lbl.setText(f"ERRO: {e}")
+        self._imagem.setText("calculando...")
+        self._timer_previa.start()
+
+    def _desenhar_previa(self):
+        """Desenha a primeira folha para conferir antes de gerar."""
+        try:
+            itens, girado, colunas, linhas, _ = self._contagem()
+            larg, alt, margem, espaco = self._medidas()
+            folha, _ = next(iter(folhas(itens[:colunas * linhas], larg, alt, margem, espaco,
+                                        dpi=DPI_PREVIA, permitir_giro=girado)), (None, None))
+        except Exception as e:
+            self._lbl.setText(f"ERRO: {e}")
+            return
         self._imagem.clear()
         if folha is not None:
             self._imagem.setPixmap(_pixmap(_destacar(folha)))
+        self.statusBar().showMessage("Pronto.", 2000)
 
     def _gerar(self):
         itens = listar(self._ed_pasta.text())
