@@ -151,6 +151,7 @@ class Canvas(QLabel):
         self._overlay_rects = []
 
     def set_image(self, pixmap):
+        self.setCursor(Qt.CursorShape.CrossCursor)   # cruz p/ mapear
         self._pixmap = pixmap
         self._original_size = (pixmap.width(), pixmap.height())
         self._refresh()
